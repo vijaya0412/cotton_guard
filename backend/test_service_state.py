@@ -19,10 +19,17 @@ from backend.main import app
 from backend.service_state import service_state, ServiceState
 from backend.database import init_database
 
+TEST_ADMIN_KEY = "test-cotton-guard-secure-admin-key-2026"
+
 @pytest.fixture(scope="module")
 def client():
+    os.environ["ADMIN_API_KEY"] = TEST_ADMIN_KEY
     init_database()
     return TestClient(app)
+
+@pytest.fixture
+def admin_headers():
+    return {"X-Admin-Key": TEST_ADMIN_KEY}
 
 def test_initial_health_and_service_state(client):
     # Ensure initially RUNNING
@@ -33,17 +40,35 @@ def test_initial_health_and_service_state(client):
     assert data["disease_model_ready"] is True
     assert data["model_loaded"] is True
 
-def test_admin_get_state(client):
-    resp = client.get("/api/v1/admin/service/state")
+def test_admin_unauthenticated_requests_fail_closed(client):
+    # Every admin endpoint must strictly reject unauthenticated requests with HTTP 403
+    for path in [
+        "/api/v1/admin/service/state",
+        "/api/v1/admin/service/logs"
+    ]:
+        resp = client.get(path)
+        assert resp.status_code == 403
+        assert "administrator privilege required" in resp.json()["detail"].lower()
+
+    for path in [
+        "/api/v1/admin/service/start",
+        "/api/v1/admin/service/stop"
+    ]:
+        resp = client.post(path)
+        assert resp.status_code == 403
+        assert "administrator privilege required" in resp.json()["detail"].lower()
+
+def test_admin_get_state(client, admin_headers):
+    resp = client.get("/api/v1/admin/service/state", headers=admin_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is True
     assert "service_status" in data
     assert data["service_status"]["is_running"] is True
 
-def test_admin_stop_and_start_lifecycle(client):
-    # 1. Stop service
-    stop_resp = client.post("/api/v1/admin/service/stop")
+def test_admin_stop_and_start_lifecycle(client, admin_headers):
+    # 1. Stop service with valid admin credentials
+    stop_resp = client.post("/api/v1/admin/service/stop", headers=admin_headers)
     assert stop_resp.status_code == 200
     stop_data = stop_resp.json()
     assert stop_data["success"] is True
@@ -68,8 +93,8 @@ def test_admin_stop_and_start_lifecycle(client):
     assert pred_resp.status_code == 503
     assert "paused by the administrator" in pred_resp.json()["detail"].lower()
 
-    # 4. Start service again
-    start_resp = client.post("/api/v1/admin/service/start")
+    # 4. Start service again with valid admin credentials
+    start_resp = client.post("/api/v1/admin/service/start", headers=admin_headers)
     assert start_resp.status_code == 200
     start_data = start_resp.json()
     assert start_data["success"] is True
@@ -81,8 +106,8 @@ def test_admin_stop_and_start_lifecycle(client):
     assert health_after.json()["status"] == "CONNECTED"
     assert health_after.json()["disease_model_ready"] is True
 
-def test_admin_audit_logs_retrieval(client):
-    resp = client.get("/api/v1/admin/service/logs")
+def test_admin_audit_logs_retrieval(client, admin_headers):
+    resp = client.get("/api/v1/admin/service/logs", headers=admin_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is True

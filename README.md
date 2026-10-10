@@ -1,3 +1,13 @@
+---
+title: Cotton Guard AI
+emoji: 🌿
+colorFrom: green
+colorTo: blue
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # COTTON GUARD 🌿
 ### AI-Based Smart Cotton Leaf Disease Detection & Agronomic Advisory System
 

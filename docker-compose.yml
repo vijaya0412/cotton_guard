@@ -6,21 +6,22 @@ services:
     container_name: cottonguard-backend
     restart: unless-stopped
     environment:
-      - PORT=8000
+      - PORT=7860
       - HOST=0.0.0.0
       - SQLITE_DB_PATH=/var/data/advisory.db
       - ONNX_MODEL_PATH=/app/ml/models/cotton_guard_model.onnx
-      - COTTON_GUARD_SECRET_KEY=${COTTON_GUARD_SECRET_KEY:-cotton-guard-prod-key-2026-auth-security-master}
+      - COTTON_GUARD_SECRET_KEY=${COTTON_GUARD_SECRET_KEY:-}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-647603326934-slkp7nf3ftducsfjq1dscvs06kj0q4im.apps.googleusercontent.com}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@cottonguard.org}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:-}
     volumes:
       - cottonguard_data:/var/data
       - cottonguard_backups:/var/backups
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:7860:7860"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:7860/api/v1/health"]
       interval: 30s
       timeout: 5s
       retries: 3

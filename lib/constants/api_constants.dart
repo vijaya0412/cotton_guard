@@ -29,19 +29,37 @@ class ApiConstants {
   static const String googleServerClientId =
       "647603326934-slkp7nf3ftducsfjq1dscvs06kj0q4im.apps.googleusercontent.com";
 
-  // Timeouts (tuned for cloud cold starts and network latency)
-  static const Duration connectTimeout = Duration(seconds: 15);
-  static const Duration requestTimeout = Duration(seconds: 45);
+  // Timeouts (tuned for cloud cold starts and network latency on free-tier hosting)
+  static const Duration connectTimeout = Duration(seconds: 45);
+  static const Duration requestTimeout = Duration(seconds: 60);
 
+  /// Helper to determine if a hostname/IP represents a local development environment.
+  static bool _isLocalHost(String host) {
+    final lower = host.toLowerCase();
+    return lower == 'localhost' ||
+        lower == '127.0.0.1' ||
+        lower == '10.0.2.2' ||
+        lower.startsWith('192.168.') ||
+        lower.startsWith('10.') ||
+        lower.endsWith('.local') ||
+        RegExp(r'^172\.(1[6-9]|2[0-9]|3[0-1])\.').hasMatch(lower);
+  }
 
   /// Robust URL Normalizer ensuring a valid HTTP/HTTPS endpoint root with /api/v1 suffix.
+  /// Defaults un-schemed cloud domains (such as Hugging Face Spaces *.hf.space) to HTTPS,
+  /// while preserving HTTP support for explicitly configured or inferred local development hosts.
   static String normalizeBaseUrl(String input) {
     String url = input.trim();
     if (url.isEmpty) return defaultEmulatorUrl;
 
-    // Add protocol if missing
+    // Add protocol if missing: default cloud/public hosts to HTTPS, local hosts to HTTP
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'http://$url';
+      final host = url.split('/')[0].split(':')[0];
+      if (_isLocalHost(host)) {
+        url = 'http://$url';
+      } else {
+        url = 'https://$url';
+      }
     }
 
     // Strip trailing slashes

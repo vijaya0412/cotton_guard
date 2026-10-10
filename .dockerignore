@@ -1,0 +1,68 @@
+# ==============================================================================
+# Cotton Guard - Docker Build Context Exclusion Rules (.dockerignore)
+# Minimizes Hugging Face Spaces build image size and transfer time
+# ==============================================================================
+
+# Version Control & CI/CD
+.git/
+.github/
+
+# Raw Datasets & Intermediate Tensors (~3 GB)
+dataset/
+scratch/
+reports/
+
+# Flutter & Dart Build Output and Dependencies
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+android/
+ios/
+linux/
+macos/
+windows/
+web/
+lib/
+test/
+
+# Editor, IDE & System Files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Python Caches, Virtualenvs & Tests
+__pycache__/
+*.py[cod]
+*$py.class
+env/
+venv/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+pytest.ini
+
+# Local Databases, Logs & Secrets
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+.env*
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
+*.jks
+*.keystore
+key.properties
+local.properties

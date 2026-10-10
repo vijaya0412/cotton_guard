@@ -1,6 +1,7 @@
 """
-Cotton Guard - SQLite Knowledge Base & Retrieval-Based Advisory Engine.
+Cotton Guard - Knowledge Base, Advisory Engine & Dual-Engine Persistence Layer.
 Implements Class-Based Database Retrieval for Disease Diagnosis & Agronomic Management.
+Supports both SQLite (local development & ephemeral mode) and PostgreSQL (production persistence via DATABASE_URL).
 """
 
 import os
@@ -17,20 +18,151 @@ DB_PATH = os.environ.get(
     "SQLITE_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "advisory.db")
 )
-SECRET_KEY = os.environ.get("COTTON_GUARD_SECRET_KEY", "cotton-guard-prod-key-2026-auth-security-master")
 
-def init_database(db_path: str = DB_PATH):
-    """Initializes and seeds the SQLite Knowledge Base with WAL concurrency."""
-    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+_DYNAMIC_DEV_SECRET: Optional[str] = None
 
-    # Enable WAL mode for high concurrency read/write
-    cursor.execute("PRAGMA journal_mode=WAL;")
-    cursor.execute("PRAGMA busy_timeout=5000;")
+def get_secret_key() -> str:
+    """
+    Authoritative retrieval of cryptographic signing secret.
+    In production: strictly requires COTTON_GUARD_SECRET_KEY in environment and fails safely if absent or insecure.
+    In development/testing: generates an ephemeral secure random 256-bit secret if unset.
+    """
+    global _DYNAMIC_DEV_SECRET
+    env = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development")).strip().lower()
+    configured = os.environ.get("COTTON_GUARD_SECRET_KEY", "").strip()
 
-    # Create Tables
-    cursor.execute("""
+    if env in ["production", "prod"]:
+        if not configured or configured == "cotton-guard-prod-key-2026-auth-security-master" or len(configured) < 32:
+            raise RuntimeError(
+                "CRITICAL SECURITY CONFIGURATION ERROR: COTTON_GUARD_SECRET_KEY environment variable "
+                "is required in production (min 32 characters) and must not use an insecure default."
+            )
+        return configured
+
+    if configured and configured != "cotton-guard-prod-key-2026-auth-security-master":
+        return configured
+
+    if _DYNAMIC_DEV_SECRET is None:
+        _DYNAMIC_DEV_SECRET = secrets.token_hex(32)
+    return _DYNAMIC_DEV_SECRET
+
+
+def get_engine_config(db_path: Optional[str] = None, db_url: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Determines active database engine ('sqlite' or 'postgres') and connection target.
+    Priority:
+    1. Explicit db_url argument starting with postgres:// or postgresql://
+    2. Explicit db_path argument starting with postgres:// or postgresql://
+    3. Custom db_path (different from default DB_PATH) -> SQLite on that custom path
+    4. DATABASE_URL environment variable starting with postgres:// or postgresql://
+    5. Default local SQLite file at DB_PATH
+    """
+    if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")):
+        return "postgres", db_url
+
+    if db_path and (db_path.startswith("postgresql://") or db_path.startswith("postgres://")):
+        return "postgres", db_path
+
+    if db_path is not None and db_path != DB_PATH:
+        return "sqlite", db_path
+
+    env_url = os.environ.get("DATABASE_URL", "").strip()
+    if env_url.startswith("postgresql://") or env_url.startswith("postgres://"):
+        return "postgres", env_url
+
+    return "sqlite", db_path or DB_PATH
+
+
+class DatabaseConnection:
+    """
+    Context manager providing unified database access across SQLite and PostgreSQL (psycopg2).
+    Automatically maps parameter placeholders ('?' -> '%s' for Postgres),
+    normalizes dictionary cursors, and commits/rollbacks transactions safely.
+    """
+    def __init__(self, db_path: str = DB_PATH, db_url: Optional[str] = None):
+        self.engine, self.target = get_engine_config(db_path, db_url)
+        self.conn = None
+        self.cursor = None
+
+    def __enter__(self):
+        if self.engine == "postgres":
+            import psycopg2
+            import psycopg2.extras
+            self.conn = psycopg2.connect(self.target)
+            self.cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        else:
+            if self.target != ":memory:":
+                os.makedirs(os.path.dirname(os.path.abspath(self.target)), exist_ok=True)
+            self.conn = sqlite3.connect(self.target)
+            self.conn.row_factory = sqlite3.Row
+            self.cursor = self.conn.cursor()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.conn:
+            try:
+                if exc_type is None:
+                    self.conn.commit()
+                else:
+                    self.conn.rollback()
+            finally:
+                if self.cursor:
+                    try:
+                        self.cursor.close()
+                    except Exception:
+                        pass
+                self.conn.close()
+
+    def _prepare_sql(self, sql: str) -> str:
+        if self.engine == "postgres":
+            return sql.replace("?", "%s")
+        return sql
+
+    def execute(self, sql: str, params: tuple = ()):
+        prep_sql = self._prepare_sql(sql)
+        self.cursor.execute(prep_sql, params)
+        return self.cursor
+
+    def fetchone(self) -> Optional[Dict[str, Any]]:
+        row = self.cursor.fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def fetchall(self) -> List[Dict[str, Any]]:
+        rows = self.cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    @property
+    def rowcount(self) -> int:
+        return self.cursor.rowcount if self.cursor else 0
+
+    def execute_insert(self, sql: str, params: tuple = (), returning_col: Optional[str] = None) -> Any:
+        """
+        Executes INSERT query and returns generated primary key.
+        PostgreSQL appends 'RETURNING <col>', SQLite retrieves cursor.lastrowid.
+        """
+        if self.engine == "postgres":
+            sql_clean = sql.strip().rstrip(";")
+            if returning_col and "RETURNING" not in sql_clean.upper():
+                sql_clean = f"{sql_clean} RETURNING {returning_col}"
+            prep_sql = self._prepare_sql(sql_clean)
+            self.cursor.execute(prep_sql, params)
+            if returning_col:
+                row = self.cursor.fetchone()
+                if row:
+                    return row[returning_col] if isinstance(row, dict) else row[0]
+            return None
+        else:
+            self.cursor.execute(sql, params)
+            return self.cursor.lastrowid
+
+
+# DDL Schema Definitions
+SQLITE_SCHEMA = [
+    "PRAGMA journal_mode=WAL;",
+    "PRAGMA busy_timeout=5000;",
+    """
     CREATE TABLE IF NOT EXISTS diseases (
         disease_id INTEGER PRIMARY KEY AUTOINCREMENT,
         canonical_name TEXT UNIQUE NOT NULL,
@@ -39,27 +171,24 @@ def init_database(db_path: str = DB_PATH):
         is_healthy INTEGER NOT NULL DEFAULT 0,
         favorable_conditions TEXT
     );
-    """)
-
-    cursor.execute("""
+    """,
+    """
     CREATE TABLE IF NOT EXISTS symptoms (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         disease_id INTEGER NOT NULL,
         symptom TEXT NOT NULL,
         FOREIGN KEY (disease_id) REFERENCES diseases (disease_id) ON DELETE CASCADE
     );
-    """)
-
-    cursor.execute("""
+    """,
+    """
     CREATE TABLE IF NOT EXISTS prevention (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         disease_id INTEGER NOT NULL,
         recommendation TEXT NOT NULL,
         FOREIGN KEY (disease_id) REFERENCES diseases (disease_id) ON DELETE CASCADE
     );
-    """)
-
-    cursor.execute("""
+    """,
+    """
     CREATE TABLE IF NOT EXISTS treatment (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         disease_id INTEGER NOT NULL,
@@ -67,9 +196,8 @@ def init_database(db_path: str = DB_PATH):
         recommendation TEXT NOT NULL,
         FOREIGN KEY (disease_id) REFERENCES diseases (disease_id) ON DELETE CASCADE
     );
-    """)
-
-    cursor.execute("""
+    """,
+    """
     CREATE TABLE IF NOT EXISTS severity (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         disease_id INTEGER NOT NULL,
@@ -78,9 +206,8 @@ def init_database(db_path: str = DB_PATH):
         description TEXT NOT NULL,
         FOREIGN KEY (disease_id) REFERENCES diseases (disease_id) ON DELETE CASCADE
     );
-    """)
-
-    cursor.execute("""
+    """,
+    """
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
@@ -96,9 +223,8 @@ def init_database(db_path: str = DB_PATH):
         provider TEXT DEFAULT 'email',
         created_at TEXT NOT NULL
     );
-    """)
-
-    cursor.execute("""
+    """,
+    """
     CREATE TABLE IF NOT EXISTS password_resets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         email TEXT NOT NULL,
@@ -106,9 +232,8 @@ def init_database(db_path: str = DB_PATH):
         expires_at TEXT NOT NULL,
         used INTEGER DEFAULT 0
     );
-    """)
-
-    cursor.execute("""
+    """,
+    """
     CREATE TABLE IF NOT EXISTS service_audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp TEXT NOT NULL,
@@ -119,7 +244,95 @@ def init_database(db_path: str = DB_PATH):
         ip_address TEXT DEFAULT '',
         details TEXT DEFAULT ''
     );
-    """)
+    """
+]
+
+POSTGRES_SCHEMA = [
+    """
+    CREATE TABLE IF NOT EXISTS diseases (
+        disease_id SERIAL PRIMARY KEY,
+        canonical_name TEXT UNIQUE NOT NULL,
+        scientific_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        is_healthy INTEGER NOT NULL DEFAULT 0,
+        favorable_conditions TEXT
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS symptoms (
+        id SERIAL PRIMARY KEY,
+        disease_id INTEGER NOT NULL REFERENCES diseases (disease_id) ON DELETE CASCADE,
+        symptom TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS prevention (
+        id SERIAL PRIMARY KEY,
+        disease_id INTEGER NOT NULL REFERENCES diseases (disease_id) ON DELETE CASCADE,
+        recommendation TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS treatment (
+        id SERIAL PRIMARY KEY,
+        disease_id INTEGER NOT NULL REFERENCES diseases (disease_id) ON DELETE CASCADE,
+        treatment_type TEXT DEFAULT 'Chemical',
+        recommendation TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS severity (
+        id SERIAL PRIMARY KEY,
+        disease_id INTEGER NOT NULL REFERENCES diseases (disease_id) ON DELETE CASCADE,
+        severity_level INTEGER NOT NULL,
+        severity_label TEXT NOT NULL,
+        description TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT,
+        salt TEXT,
+        full_name TEXT NOT NULL,
+        phone TEXT DEFAULT '',
+        location TEXT DEFAULT 'Warangal, Telangana',
+        latitude REAL,
+        longitude REAL,
+        role TEXT DEFAULT 'Cotton Farmer',
+        profile_image_url TEXT,
+        provider TEXT DEFAULT 'email',
+        created_at TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS password_resets (
+        id SERIAL PRIMARY KEY,
+        email TEXT NOT NULL,
+        reset_token TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used INTEGER DEFAULT 0
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS service_audit_logs (
+        id SERIAL PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        admin_email TEXT NOT NULL,
+        action TEXT NOT NULL,
+        prior_state TEXT NOT NULL,
+        new_state TEXT NOT NULL,
+        ip_address TEXT DEFAULT '',
+        details TEXT DEFAULT ''
+    );
+    """
+]
+
+
+def init_database(db_path: str = DB_PATH, db_url: Optional[str] = None):
+    """Initializes schema and seeds Canonical Knowledge Base with idempotency across engines."""
+    engine, target = get_engine_config(db_path, db_url)
 
     # Seed Data for 7 Canonical Classes
     seed_records = [
@@ -312,40 +525,56 @@ def init_database(db_path: str = DB_PATH):
         }
     ]
 
-    for rec in seed_records:
-        cursor.execute("""
-        INSERT OR REPLACE INTO diseases (canonical_name, scientific_name, description, is_healthy, favorable_conditions)
-        VALUES (?, ?, ?, ?, ?)
-        """, (rec["canonical_name"], rec["scientific_name"], rec["description"], rec["is_healthy"], rec["favorable_conditions"]))
-        
-        disease_id = cursor.lastrowid
-        # In case of REPLACE, fetch the id
-        cursor.execute("SELECT disease_id FROM diseases WHERE canonical_name = ?", (rec["canonical_name"],))
-        disease_id = cursor.fetchone()[0]
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        schema = SQLITE_SCHEMA if db.engine == "sqlite" else POSTGRES_SCHEMA
+        for statement in schema:
+            db.execute(statement)
 
-        # Clear existing relations
-        cursor.execute("DELETE FROM symptoms WHERE disease_id = ?", (disease_id,))
-        cursor.execute("DELETE FROM prevention WHERE disease_id = ?", (disease_id,))
-        cursor.execute("DELETE FROM treatment WHERE disease_id = ?", (disease_id,))
-        cursor.execute("DELETE FROM severity WHERE disease_id = ?", (disease_id,))
+        for rec in seed_records:
+            db.execute("""
+            INSERT INTO diseases (canonical_name, scientific_name, description, is_healthy, favorable_conditions)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (canonical_name) DO UPDATE SET
+                scientific_name = EXCLUDED.scientific_name,
+                description = EXCLUDED.description,
+                is_healthy = EXCLUDED.is_healthy,
+                favorable_conditions = EXCLUDED.favorable_conditions
+            """, (rec["canonical_name"], rec["scientific_name"], rec["description"], rec["is_healthy"], rec["favorable_conditions"]))
 
-        for s in rec["symptoms"]:
-            cursor.execute("INSERT INTO symptoms (disease_id, symptom) VALUES (?, ?)", (disease_id, s))
+            db.execute("SELECT disease_id FROM diseases WHERE canonical_name = ?", (rec["canonical_name"],))
+            d_row = db.fetchone()
+            disease_id = d_row["disease_id"]
 
-        for p in rec["prevention"]:
-            cursor.execute("INSERT INTO prevention (disease_id, recommendation) VALUES (?, ?)", (disease_id, p))
+            # Clear and refresh relations
+            db.execute("DELETE FROM symptoms WHERE disease_id = ?", (disease_id,))
+            db.execute("DELETE FROM prevention WHERE disease_id = ?", (disease_id,))
+            db.execute("DELETE FROM treatment WHERE disease_id = ?", (disease_id,))
+            db.execute("DELETE FROM severity WHERE disease_id = ?", (disease_id,))
 
-        for t in rec["treatment"]:
-            cursor.execute("INSERT INTO treatment (disease_id, recommendation) VALUES (?, ?)", (disease_id, t))
+            for s in rec["symptoms"]:
+                db.execute("INSERT INTO symptoms (disease_id, symptom) VALUES (?, ?)", (disease_id, s))
 
-        cursor.execute("""
-        INSERT INTO severity (disease_id, severity_level, severity_label, description)
-        VALUES (?, ?, ?, ?)
-        """, (disease_id, rec["severity_level"], rec["severity_label"], rec["severity_desc"]))
+            for p in rec["prevention"]:
+                db.execute("INSERT INTO prevention (disease_id, recommendation) VALUES (?, ?)", (disease_id, p))
 
-    conn.commit()
-    conn.close()
-    print(f"SQLite Knowledge Base initialized at {db_path} with {len(seed_records)} canonical conditions.")
+            for t in rec["treatment"]:
+                db.execute("INSERT INTO treatment (disease_id, recommendation) VALUES (?, ?)", (disease_id, t))
+
+            db.execute("""
+            INSERT INTO severity (disease_id, severity_level, severity_label, description)
+            VALUES (?, ?, ?, ?)
+            """, (disease_id, rec["severity_level"], rec["severity_label"], rec["severity_desc"]))
+
+    print(f"[{engine.upper()}] Knowledge Base initialized at {target} with {len(seed_records)} canonical conditions.")
+
+    # Validate secret key policy early on startup
+    env = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development")).strip().lower()
+    if env in ["production", "prod"]:
+        get_secret_key()
+
+    # Automatically provision designated administrator if credentials configured
+    provision_initial_admin(db_path=db_path, db_url=db_url)
+
 
 # Common disease aliases mapped to canonical names
 CLASS_ALIASES = {
@@ -380,85 +609,83 @@ def resolve_canonical_class(query_name: str) -> str:
     clean = query_name.strip()
     return CLASS_ALIASES.get(clean.lower(), clean)
 
-def get_advisory_for_class(canonical_class: str, db_path: str = DB_PATH) -> Optional[Dict[str, Any]]:
+def get_advisory_for_class(
+    canonical_class: str,
+    db_path: str = DB_PATH,
+    db_url: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
-    Class-Based Database Retrieval from SQLite Knowledge Base.
+    Class-Based Database Retrieval from Knowledge Base.
     Query: SELECT ... FROM ... WHERE canonical_name = ?
-    Supports alias resolution and case-insensitive lookups.
+    Supports alias resolution and case-insensitive lookups across SQLite and PostgreSQL.
     """
-    if not os.path.exists(db_path):
-        init_database(db_path)
+    engine, target = get_engine_config(db_path, db_url)
+    if engine == "sqlite" and target != ":memory:" and not os.path.exists(target):
+        init_database(db_path=db_path, db_url=db_url)
 
     canonical_target = resolve_canonical_class(canonical_class)
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        db.execute("""
+            SELECT disease_id, canonical_name, scientific_name, description, is_healthy, favorable_conditions
+            FROM diseases
+            WHERE canonical_name = ? OR LOWER(canonical_name) = LOWER(?)
+        """, (canonical_target, canonical_target))
+        d_row = db.fetchone()
 
-    cursor.execute("""
-        SELECT disease_id, canonical_name, scientific_name, description, is_healthy, favorable_conditions
-        FROM diseases
-        WHERE canonical_name = ? OR LOWER(canonical_name) = LOWER(?)
-    """, (canonical_target, canonical_target))
-    d_row = cursor.fetchone()
+        if not d_row:
+            return None
 
-    if not d_row:
-        conn.close()
-        return None
+        disease_id = d_row["disease_id"]
 
-    disease_id = d_row["disease_id"]
+        # Fetch Symptoms
+        db.execute("SELECT symptom FROM symptoms WHERE disease_id = ? ORDER BY id ASC", (disease_id,))
+        symptoms = [r["symptom"] for r in db.fetchall()]
 
-    # Fetch Symptoms
-    cursor.execute("SELECT symptom FROM symptoms WHERE disease_id = ? ORDER BY id ASC", (disease_id,))
-    symptoms = [r["symptom"] for r in cursor.fetchall()]
+        # Fetch Prevention
+        db.execute("SELECT recommendation FROM prevention WHERE disease_id = ? ORDER BY id ASC", (disease_id,))
+        prevention = [r["recommendation"] for r in db.fetchall()]
 
-    # Fetch Prevention
-    cursor.execute("SELECT recommendation FROM prevention WHERE disease_id = ? ORDER BY id ASC", (disease_id,))
-    prevention = [r["recommendation"] for r in cursor.fetchall()]
+        # Fetch Treatment
+        db.execute("SELECT recommendation FROM treatment WHERE disease_id = ? ORDER BY id ASC", (disease_id,))
+        treatment = [r["recommendation"] for r in db.fetchall()]
 
-    # Fetch Treatment
-    cursor.execute("SELECT recommendation FROM treatment WHERE disease_id = ? ORDER BY id ASC", (disease_id,))
-    treatment = [r["recommendation"] for r in cursor.fetchall()]
+        # Fetch Severity
+        db.execute("SELECT severity_level, severity_label, description FROM severity WHERE disease_id = ?", (disease_id,))
+        s_row = db.fetchone()
+        severity_level = s_row["severity_level"] if s_row else 1
+        severity_label = s_row["severity_label"] if s_row else "Normal"
+        severity_desc = s_row["description"] if s_row else ""
 
-    # Fetch Severity
-    cursor.execute("SELECT severity_level, severity_label, description FROM severity WHERE disease_id = ?", (disease_id,))
-    s_row = cursor.fetchone()
-    severity_level = s_row["severity_level"] if s_row else 1
-    severity_label = s_row["severity_label"] if s_row else "Normal"
-    severity_desc = s_row["description"] if s_row else ""
+        return {
+            "disease_id": disease_id,
+            "canonical_name": d_row["canonical_name"],
+            "scientific_name": d_row["scientific_name"],
+            "summary": d_row["description"],
+            "is_healthy": bool(d_row["is_healthy"]),
+            "favorable_conditions": d_row["favorable_conditions"],
+            "severity": severity_label,
+            "severity_level": severity_level,
+            "severity_desc": severity_desc,
+            "symptoms": symptoms,
+            "prevention": prevention,
+            "treatment": treatment,
+            "advisory": treatment  # Backward compatibility
+        }
 
-    conn.close()
-
-    return {
-        "disease_id": disease_id,
-        "canonical_name": d_row["canonical_name"],
-        "scientific_name": d_row["scientific_name"],
-        "summary": d_row["description"],
-        "is_healthy": bool(d_row["is_healthy"]),
-        "favorable_conditions": d_row["favorable_conditions"],
-        "severity": severity_label,
-        "severity_level": severity_level,
-        "severity_desc": severity_desc,
-        "symptoms": symptoms,
-        "prevention": prevention,
-        "treatment": treatment,
-        "advisory": treatment  # Backward compatibility
-    }
-
-def get_all_advisories(db_path: str = DB_PATH) -> Dict[str, Any]:
+def get_all_advisories(db_path: str = DB_PATH, db_url: Optional[str] = None) -> Dict[str, Any]:
     """Retrieves full advisory catalog for all canonical classes."""
-    if not os.path.exists(db_path):
-        init_database(db_path)
+    engine, target = get_engine_config(db_path, db_url)
+    if engine == "sqlite" and target != ":memory:" and not os.path.exists(target):
+        init_database(db_path=db_path, db_url=db_url)
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT canonical_name FROM diseases ORDER BY disease_id ASC")
-    classes = [r[0] for r in cursor.fetchall()]
-    conn.close()
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        db.execute("SELECT canonical_name FROM diseases ORDER BY disease_id ASC")
+        classes = [r["canonical_name"] for r in db.fetchall()]
 
     catalog = {}
     for c in classes:
-        adv = get_advisory_for_class(c, db_path)
+        adv = get_advisory_for_class(c, db_path=db_path, db_url=db_url)
         if adv:
             catalog[c] = adv
     return catalog
@@ -491,8 +718,9 @@ def generate_session_token(user_id: str, email: str) -> str:
         "email": email,
         "exp": int(time.time()) + 30 * 86400  # 30 days validity
     }
+    secret = get_secret_key()
     payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
-    signature = hmac.new(SECRET_KEY.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()
+    signature = hmac.new(secret.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()
     return f"{payload_b64}.{signature}"
 
 def verify_session_token(token: str) -> Optional[Dict[str, Any]]:
@@ -502,7 +730,8 @@ def verify_session_token(token: str) -> Optional[Dict[str, Any]]:
         if len(parts) != 2:
             return None
         payload_b64, signature = parts
-        expected = hmac.new(SECRET_KEY.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()
+        secret = get_secret_key()
+        expected = hmac.new(secret.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()
         if not secrets.compare_digest(signature, expected):
             return None
         payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode()).decode())
@@ -523,11 +752,13 @@ def create_user(
     role: str = "Cotton Farmer",
     profile_image_url: Optional[str] = None,
     provider: str = "email",
-    db_path: str = DB_PATH
+    db_path: str = DB_PATH,
+    db_url: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Creates a new user record in SQLite with salted password hashing."""
-    if not os.path.exists(db_path):
-        init_database(db_path)
+    """Creates a new user record with salted password hashing."""
+    engine, target = get_engine_config(db_path, db_url)
+    if engine == "sqlite" and target != ":memory:" and not os.path.exists(target):
+        init_database(db_path=db_path, db_url=db_url)
 
     clean_email = email.strip().lower()
     user_id = f"usr_{secrets.token_hex(8)}"
@@ -537,17 +768,11 @@ def create_user(
     if password:
         pw_hash, salt = hash_password(password)
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute("""
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        db.execute("""
             INSERT INTO users (id, email, password_hash, salt, full_name, phone, location, latitude, longitude, role, profile_image_url, provider, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (user_id, clean_email, pw_hash, salt, full_name.strip(), phone.strip(), location.strip(), latitude, longitude, role.strip(), profile_image_url, provider, created_at))
-        conn.commit()
-    finally:
-        conn.close()
 
     return {
         "id": user_id,
@@ -563,72 +788,51 @@ def create_user(
         "created_at": created_at
     }
 
-def get_user_by_email(email: str, db_path: str = DB_PATH) -> Optional[Dict[str, Any]]:
+def get_user_by_email(email: str, db_path: str = DB_PATH, db_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Retrieves user record by email address."""
-    if not os.path.exists(db_path):
-        init_database(db_path)
+    engine, target = get_engine_config(db_path, db_url)
+    if engine == "sqlite" and target != ":memory:" and not os.path.exists(target):
+        init_database(db_path=db_path, db_url=db_url)
 
     clean_email = email.strip().lower()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        db.execute("SELECT * FROM users WHERE LOWER(email) = ?", (clean_email,))
+        return db.fetchone()
 
-    cursor.execute("SELECT * FROM users WHERE LOWER(email) = ?", (clean_email,))
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row:
-        return None
-    return dict(row)
-
-def get_user_by_id(user_id: str, db_path: str = DB_PATH) -> Optional[Dict[str, Any]]:
+def get_user_by_id(user_id: str, db_path: str = DB_PATH, db_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Retrieves user record by ID."""
-    if not os.path.exists(db_path):
-        init_database(db_path)
+    engine, target = get_engine_config(db_path, db_url)
+    if engine == "sqlite" and target != ":memory:" and not os.path.exists(target):
+        init_database(db_path=db_path, db_url=db_url)
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        db.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        return db.fetchone()
 
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row:
-        return None
-    return dict(row)
-
-def update_user_password(email: str, new_password: str, db_path: str = DB_PATH) -> bool:
+def update_user_password(email: str, new_password: str, db_path: str = DB_PATH, db_url: Optional[str] = None) -> bool:
     """Updates user password with fresh salt and hash."""
     clean_email = email.strip().lower()
     pw_hash, salt = hash_password(new_password)
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE users SET password_hash = ?, salt = ? WHERE LOWER(email) = ?
-    """, (pw_hash, salt, clean_email))
-    updated = cursor.rowcount > 0
-    conn.commit()
-    conn.close()
-    return updated
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        db.execute("""
+            UPDATE users SET password_hash = ?, salt = ? WHERE LOWER(email) = ?
+        """, (pw_hash, salt, clean_email))
+        return db.rowcount > 0
 
 def create_or_get_google_user(
     email: str,
     full_name: str,
     photo_url: Optional[str] = None,
-    db_path: str = DB_PATH
+    db_path: str = DB_PATH,
+    db_url: Optional[str] = None
 ) -> Dict[str, Any]:
     """Retrieves or creates user authenticated via Google OAuth."""
-    existing = get_user_by_email(email, db_path)
+    existing = get_user_by_email(email, db_path=db_path, db_url=db_url)
     if existing:
-        # Update profile image if newly provided
         if photo_url and existing.get("profile_image_url") != photo_url:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET profile_image_url = ? WHERE id = ?", (photo_url, existing["id"]))
-            conn.commit()
-            conn.close()
+            with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+                db.execute("UPDATE users SET profile_image_url = ? WHERE id = ?", (photo_url, existing["id"]))
             existing["profile_image_url"] = photo_url
         return existing
 
@@ -636,50 +840,95 @@ def create_or_get_google_user(
         email=email,
         password=None,
         full_name=full_name,
+        role="Cotton Farmer",
         profile_image_url=photo_url,
         provider="google",
-        db_path=db_path
+        db_path=db_path,
+        db_url=db_url
     )
 
-def create_password_reset(email: str, db_path: str = DB_PATH) -> str:
+def provision_initial_admin(
+    admin_email: Optional[str] = None,
+    admin_password: Optional[str] = None,
+    full_name: str = "System Administrator",
+    db_path: str = DB_PATH,
+    db_url: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Secure first-admin provisioning routine.
+    Provisions or promotes the designated administrator from environment variables or explicit parameters.
+    Never exposes admin creation to unauthenticated public self-registration.
+    CRITICAL: Never resets or overwrites an existing administrator's password on restart.
+    """
+    target_email = (admin_email or os.environ.get("ADMIN_EMAIL", "")).strip().lower()
+    target_password = admin_password or os.environ.get("ADMIN_INITIAL_PASSWORD", "")
+
+    if not target_email or "@" not in target_email:
+        return None
+
+    existing = get_user_by_email(target_email, db_path=db_path, db_url=db_url)
+    if existing:
+        # If user exists, ensure role is upgraded to System Admin without touching password
+        if existing.get("role") not in ["System Admin", "Admin"]:
+            with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+                db.execute("UPDATE users SET role = 'System Admin' WHERE id = ?", (existing["id"],))
+            existing["role"] = "System Admin"
+            print(f"[CottonGuard Security] Existing user {target_email} promoted to System Admin.")
+        return existing
+
+    if not target_password:
+        return None
+
+    user = create_user(
+        email=target_email,
+        password=target_password,
+        full_name=full_name,
+        role="System Admin",
+        provider="provisioned",
+        db_path=db_path,
+        db_url=db_url
+    )
+    print(f"[CottonGuard Security] First admin account securely provisioned for {target_email}.")
+    return user
+
+def create_password_reset(email: str, db_path: str = DB_PATH, db_url: Optional[str] = None) -> str:
     """Generates password reset token valid for 1 hour."""
     clean_email = email.strip().lower()
     token = secrets.token_urlsafe(24)
     expires_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO password_resets (email, reset_token, expires_at, used)
-        VALUES (?, ?, ?, 0)
-    """, (clean_email, token, expires_at))
-    conn.commit()
-    conn.close()
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        db.execute("""
+            INSERT INTO password_resets (email, reset_token, expires_at, used)
+            VALUES (?, ?, ?, 0)
+        """, (clean_email, token, expires_at))
     return token
 
-def verify_and_use_reset_token(email: str, token: str, new_password: str, db_path: str = DB_PATH) -> bool:
+def verify_and_use_reset_token(
+    email: str,
+    token: str,
+    new_password: str,
+    db_path: str = DB_PATH,
+    db_url: Optional[str] = None
+) -> bool:
     """Verifies reset token validity, updates password, and consumes token."""
     clean_email = email.strip().lower()
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id FROM password_resets
-        WHERE LOWER(email) = ? AND reset_token = ? AND used = 0 AND expires_at > ?
-    """, (clean_email, token.strip(), now_iso))
-    row = cursor.fetchone()
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        db.execute("""
+            SELECT id FROM password_resets
+            WHERE LOWER(email) = ? AND reset_token = ? AND used = 0 AND expires_at > ?
+        """, (clean_email, token.strip(), now_iso))
+        row = db.fetchone()
 
-    if not row:
-        conn.close()
-        return False
+        if not row:
+            return False
 
-    reset_id = row[0]
-    cursor.execute("UPDATE password_resets SET used = 1 WHERE id = ?", (reset_id,))
-    conn.commit()
-    conn.close()
+        reset_id = row["id"]
+        db.execute("UPDATE password_resets SET used = 1 WHERE id = ?", (reset_id,))
 
-    return update_user_password(clean_email, new_password, db_path)
+    return update_user_password(clean_email, new_password, db_path=db_path, db_url=db_url)
 
 def log_service_action(
     admin_email: str,
@@ -688,44 +937,42 @@ def log_service_action(
     new_state: str,
     ip_address: str = "",
     details: str = "",
-    db_path: str = DB_PATH
+    db_path: str = DB_PATH,
+    db_url: Optional[str] = None
 ) -> int:
-    """Records an administrative start/stop service state change in SQLite."""
-    if not os.path.exists(db_path):
-        init_database(db_path)
+    """Records an administrative start/stop service state change in database."""
+    engine, target = get_engine_config(db_path, db_url)
+    if engine == "sqlite" and target != ":memory:" and not os.path.exists(target):
+        init_database(db_path=db_path, db_url=db_url)
 
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO service_audit_logs (timestamp, admin_email, action, prior_state, new_state, ip_address, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (ts, admin_email.strip().lower(), action, prior_state, new_state, ip_address, details))
-    conn.commit()
-    log_id = cursor.lastrowid
-    conn.close()
-    return log_id or 0
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        log_id = db.execute_insert("""
+            INSERT INTO service_audit_logs (timestamp, admin_email, action, prior_state, new_state, ip_address, details)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (ts, admin_email.strip().lower(), action, prior_state, new_state, ip_address, details), returning_col="id")
+    return int(log_id) if log_id else 0
 
-def get_service_audit_logs(limit: int = 50, db_path: str = DB_PATH) -> List[Dict[str, Any]]:
+def get_service_audit_logs(
+    limit: int = 50,
+    db_path: str = DB_PATH,
+    db_url: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """Retrieves recent administrative service state audit logs."""
-    if not os.path.exists(db_path):
-        init_database(db_path)
+    engine, target = get_engine_config(db_path, db_url)
+    if engine == "sqlite" and target != ":memory:" and not os.path.exists(target):
+        init_database(db_path=db_path, db_url=db_url)
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM service_audit_logs
-        ORDER BY id DESC
-        LIMIT ?
-    """, (limit,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    with DatabaseConnection(db_path=db_path, db_url=db_url) as db:
+        db.execute("""
+            SELECT * FROM service_audit_logs
+            ORDER BY id DESC
+            LIMIT ?
+        """, (limit,))
+        return db.fetchall()
 
 if __name__ == "__main__":
     init_database()
     sample = get_advisory_for_class("Bacterial Blight")
     print("\nSample Retrieval for 'Bacterial Blight':")
     print(sample)
-

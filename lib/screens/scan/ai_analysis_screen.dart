@@ -262,7 +262,20 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
                                 : AppColors.textSecondaryLight,
                           ),
                         ),
-                        const SizedBox(height: 30),
+                        if (_currentStageIndex >= 1) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Connecting to AI backend (cloud instances may take up to 45s if waking from sleep)...',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark
+                                  ? AppColors.textMutedDark
+                                  : AppColors.textMutedLight,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 26),
 
                         // Stages Card
                         Container(
@@ -429,6 +442,7 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
         (err.code == 'CONNECTION_REFUSED' || err.code == 'TIMEOUT')) {
       return ErrorStateView.serverOffline(
         message: err.message,
+        retryButtonText: 'Retry Leaf Analysis',
         onConfigureServer: () {
           Navigator.of(context).push(
             MaterialPageRoute(

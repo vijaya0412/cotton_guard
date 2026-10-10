@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cottonguard/constants/canonical_classes.dart';
+import 'package:cottonguard/constants/api_constants.dart';
 import 'package:cottonguard/models/prediction_result.dart';
 import 'package:cottonguard/models/server_health.dart';
 import 'package:cottonguard/models/scan_record.dart';
@@ -174,6 +175,45 @@ void main() {
       expect(history.healthyPercentage, 50.0);
       expect(history.diseaseDistribution['Bacterial Blight'], 1);
       expect(history.diseaseDistribution['Healthy Leaf'], 1);
+    });
+
+    test('ApiConstants normalizes cloud domains to HTTPS and preserves local development HTTP', () {
+      expect(ApiConstants.connectTimeout, const Duration(seconds: 45));
+      expect(ApiConstants.requestTimeout, const Duration(seconds: 60));
+
+      // Cloud domain without scheme defaults to HTTPS
+      expect(
+        ApiConstants.normalizeBaseUrl('cotton-guard.hf.space'),
+        'https://cotton-guard.hf.space/api/v1',
+      );
+      expect(
+        ApiConstants.normalizeBaseUrl('api.cottonguard.org/api'),
+        'https://api.cottonguard.org/api/v1',
+      );
+
+      // Explicit HTTPS preserved
+      expect(
+        ApiConstants.normalizeBaseUrl('https://my-space.hf.space'),
+        'https://my-space.hf.space/api/v1',
+      );
+
+      // Local development hosts default to HTTP
+      expect(
+        ApiConstants.normalizeBaseUrl('10.0.2.2:8000'),
+        'http://10.0.2.2:8000/api/v1',
+      );
+      expect(
+        ApiConstants.normalizeBaseUrl('localhost:7860'),
+        'http://localhost:7860/api/v1',
+      );
+      expect(
+        ApiConstants.normalizeBaseUrl('127.0.0.1:7860'),
+        'http://127.0.0.1:7860/api/v1',
+      );
+      expect(
+        ApiConstants.normalizeBaseUrl('192.168.1.100:7860'),
+        'http://192.168.1.100:7860/api/v1',
+      );
     });
   });
 

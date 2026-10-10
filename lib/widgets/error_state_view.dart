@@ -66,6 +66,7 @@ class ErrorStateView extends StatelessWidget {
     required String message,
     required VoidCallback onConfigureServer,
     VoidCallback? onRetry,
+    String? retryButtonText,
   }) {
     return ErrorStateView(
       type: ErrorType.serverOffline,
@@ -73,7 +74,7 @@ class ErrorStateView extends StatelessWidget {
       message: message,
       primaryButtonText: 'Server Connection Settings',
       onPrimaryPressed: onConfigureServer,
-      secondaryButtonText: onRetry != null ? 'Retry Health Check' : null,
+      secondaryButtonText: onRetry != null ? (retryButtonText ?? 'Retry Connection') : null,
       onSecondaryPressed: onRetry,
     );
   }

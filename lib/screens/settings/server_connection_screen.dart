@@ -176,7 +176,7 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
                           controller: _urlController,
                           decoration: const InputDecoration(
                             prefixIcon: Icon(Icons.link_rounded),
-                            hintText: 'http://10.0.2.2:8000/api/v1',
+                            hintText: 'https://your-username-space.hf.space/api/v1',
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -193,6 +193,11 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
                           children: [
                             ActionChip(
                               avatar: const Icon(Icons.cloud_outlined, size: 16),
+                              label: const Text('Hugging Face Space (*.hf.space)'),
+                              onPressed: () => _applyPreset('https://<username>-cotton-guard.hf.space/api/v1'),
+                            ),
+                            ActionChip(
+                              avatar: const Icon(Icons.public, size: 16),
                               label: const Text('Production Cloud Server'),
                               onPressed: () => _applyPreset(ApiConstants.defaultCloudUrl),
                             ),
@@ -201,12 +206,12 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
                               onPressed: () => _applyPreset(ApiConstants.defaultEmulatorUrl),
                             ),
                             ActionChip(
-                              label: const Text('Localhost (127.0.0.1)'),
-                              onPressed: () => _applyPreset(ApiConstants.defaultLocalhostUrl),
+                              label: const Text('Localhost (127.0.0.1:7860)'),
+                              onPressed: () => _applyPreset('http://127.0.0.1:7860/api/v1'),
                             ),
                             ActionChip(
                               label: const Text('Physical Device (LAN IP Template)'),
-                              onPressed: () => _applyPreset('http://192.168.1.100:8000/api/v1'),
+                              onPressed: () => _applyPreset('http://192.168.1.100:7860/api/v1'),
                             ),
                           ],
                         ),

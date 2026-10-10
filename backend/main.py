@@ -68,11 +68,11 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for mobile application connectivity
+# Enable CORS for mobile application and web connectivity
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -530,9 +530,19 @@ def register_user_endpoint(req: RegisterRequest):
     if not req.full_name or len(req.full_name.strip()) < 2:
         raise HTTPException(status_code=400, detail="Full name must be at least 2 characters long.")
 
+    # Security requirement: Prevent public registration from self-assigning privileged roles
+    if req.role and req.role.strip().lower() in ["system admin", "admin", "administrator", "super admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Self-registration for privileged administrator roles is prohibited."
+        )
+
     existing = get_user_by_email(req.email)
     if existing:
         raise HTTPException(status_code=409, detail="An account with this email already exists. Please sign in instead.")
+
+    # All public self-registered users strictly receive the Cotton Farmer role
+    assigned_role = "Cotton Farmer"
 
     user = create_user(
         email=req.email,
@@ -542,7 +552,7 @@ def register_user_endpoint(req: RegisterRequest):
         location=req.location or "Warangal, Telangana",
         latitude=req.latitude,
         longitude=req.longitude,
-        role=req.role or "Cotton Farmer",
+        role=assigned_role,
         provider="email"
     )
     token = generate_session_token(user["id"], user["email"])
@@ -749,12 +759,15 @@ def verify_admin_authorization(
     """
     Authorizes designated administrator operations.
     Accepts:
-    1. Valid X-Admin-Key header matching ADMIN_API_KEY
-    2. Bearer session token belonging to ADMIN_EMAIL or role in ['System Admin', 'Admin']
+    1. Valid X-Admin-Key header matching configured ADMIN_API_KEY
+    2. Bearer session token belonging to verified administrator with role in ['System Admin', 'Admin']
+    Fails closed if credentials are missing or invalid under all conditions.
     """
-    if ADMIN_API_KEY and x_admin_key and secrets.compare_digest(x_admin_key.strip(), ADMIN_API_KEY):
+    current_admin_key = os.environ.get("ADMIN_API_KEY", ADMIN_API_KEY).strip()
+    if current_admin_key and x_admin_key and secrets.compare_digest(x_admin_key.strip(), current_admin_key):
         return "admin_key"
 
+    current_admin_email = os.environ.get("ADMIN_EMAIL", ADMIN_EMAIL).strip().lower()
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split("Bearer ")[1].strip()
         payload = verify_session_token(token)
@@ -763,16 +776,14 @@ def verify_admin_authorization(
             if user:
                 user_email = user.get("email", "").lower()
                 user_role = user.get("role", "")
-                if (ADMIN_EMAIL and user_email == ADMIN_EMAIL) or user_role in ["System Admin", "Admin"] or (not ADMIN_EMAIL and not ADMIN_API_KEY):
+                is_admin_role = user_role in ["System Admin", "Admin"]
+                if is_admin_role and (not current_admin_email or user_email == current_admin_email):
                     return user_email
 
-    if not ADMIN_EMAIL and not ADMIN_API_KEY:
-        # Permissive in dev/testing mode when no secrets set
-        return "dev_admin"
-
+    # Strict fail-closed policy: No dev or unauthenticated bypass
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Administrator privilege required. Operation denied."
+        detail="Administrator privilege required. Valid administrator credentials must be provided."
     )
 
 @app.get("/admin/service/state")

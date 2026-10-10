@@ -9,7 +9,7 @@ import uvicorn
 
 if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
-    port = int(os.environ.get("PORT", "8000"))
+    port = int(os.environ.get("PORT", "7860"))
     print(f"[Cotton Guard] Starting FastAPI service on {host}:{port}...")
     backend_dir = os.path.dirname(os.path.abspath(__file__))
     if backend_dir not in sys.path:
