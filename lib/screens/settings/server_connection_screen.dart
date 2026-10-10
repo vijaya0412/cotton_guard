@@ -176,7 +176,7 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
                           controller: _urlController,
                           decoration: const InputDecoration(
                             prefixIcon: Icon(Icons.link_rounded),
-                            hintText: 'https://your-username-space.hf.space/api/v1',
+                            hintText: 'https://cotton-guard.onrender.com/api/v1',
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -192,14 +192,14 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
                           runSpacing: 8,
                           children: [
                             ActionChip(
+                              avatar: const Icon(Icons.cloud_done, size: 16),
+                              label: const Text('Production Cloud (Render)'),
+                              onPressed: () => _applyPreset(ApiConstants.defaultCloudUrl),
+                            ),
+                            ActionChip(
                               avatar: const Icon(Icons.cloud_outlined, size: 16),
                               label: const Text('Hugging Face Space (*.hf.space)'),
                               onPressed: () => _applyPreset('https://<username>-cotton-guard.hf.space/api/v1'),
-                            ),
-                            ActionChip(
-                              avatar: const Icon(Icons.public, size: 16),
-                              label: const Text('Production Cloud Server'),
-                              onPressed: () => _applyPreset(ApiConstants.defaultCloudUrl),
                             ),
                             ActionChip(
                               label: const Text('Android Emulator (10.0.2.2)'),

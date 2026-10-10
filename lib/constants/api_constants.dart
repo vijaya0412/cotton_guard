@@ -3,7 +3,15 @@ class ApiConstants {
   // Default base URL for Android Emulator & Cloud
   static const String defaultEmulatorUrl = "http://10.0.2.2:8000/api/v1";
   static const String defaultLocalhostUrl = "http://127.0.0.1:8000/api/v1";
-  static const String defaultCloudUrl = "https://api.cottonguard.org/api/v1";
+  static const String defaultCloudUrl = "https://cotton-guard.onrender.com/api/v1";
+  static const String defaultProductionUrl = defaultCloudUrl;
+
+  /// Build-time configurable base URL with fallback to production Render URL.
+  /// Override for local development via: --dart-define=API_BASE_URL=http://10.0.2.2:8000/api/v1
+  static const String configuredBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: defaultCloudUrl,
+  );
 
   // Endpoints
   static const String endpointHealth = "/health";
@@ -50,7 +58,7 @@ class ApiConstants {
   /// while preserving HTTP support for explicitly configured or inferred local development hosts.
   static String normalizeBaseUrl(String input) {
     String url = input.trim();
-    if (url.isEmpty) return defaultEmulatorUrl;
+    if (url.isEmpty) return defaultProductionUrl;
 
     // Add protocol if missing: default cloud/public hosts to HTTPS, local hosts to HTTP
     if (!url.startsWith('http://') && !url.startsWith('https://')) {

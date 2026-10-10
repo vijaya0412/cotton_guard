@@ -242,7 +242,13 @@ class _ScanScreenState extends State<ScanScreen>
             final isConnected = widget.connectionController.isConnected;
 
             return SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
+              physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+              padding: EdgeInsets.fromLTRB(
+                20.0,
+                12.0,
+                20.0,
+                24.0 + MediaQuery.of(context).padding.bottom,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -275,116 +281,207 @@ class _ScanScreenState extends State<ScanScreen>
                   ],
 
                   // Large Photographic Camera Viewport with Corner Scanning Brackets
-                  Container(
-                    height: 320,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withAlpha(isDark ? 80 : 25),
-                          blurRadius: 18,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(24),
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          // Photographic viewfinder backdrop
-                          Image.asset(
-                            CottonAssets.scanCardHero,
-                            fit: BoxFit.cover,
-                          ),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final availableWidth = constraints.maxWidth;
+                      // Dynamic, responsive height matching camera 4:3 preview ratio on phones
+                      final previewHeight = (availableWidth * 0.74).clamp(250.0, 310.0);
+                      const double frameTop = 22.0;
+                      const double frameBottom = 60.0;
+                      const double frameHorizontal = 22.0;
+                      final double scanSweepDistance = previewHeight - frameTop - frameBottom - 8.0;
 
-                          // Dark viewfinder scrim
-                          Container(
-                            color: Colors.black.withAlpha(85),
+                      return Container(
+                        height: previewHeight,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(
+                            color: isDark ? Colors.white.withAlpha(25) : Colors.black.withAlpha(15),
+                            width: 1.5,
                           ),
-
-                          // Flash overlay on capture
-                          if (_isFlashing)
-                            Container(
-                              color: Colors.white.withAlpha(220),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withAlpha(isDark ? 90 : 30),
+                              blurRadius: 18,
+                              offset: const Offset(0, 6),
                             ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(22.5),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              // Photographic viewfinder backdrop centered and balanced
+                              Image.asset(
+                                CottonAssets.scanCardHero,
+                                fit: BoxFit.cover,
+                                alignment: Alignment.center,
+                              ),
 
-                          // Pulsing White Corner Scanning Brackets
-                          AnimatedBuilder(
-                            animation: _bracketOpacityAnimation,
-                            builder: (context, child) {
-                              return Opacity(
-                                opacity: _bracketOpacityAnimation.value,
-                                child: child,
-                              );
-                            },
-                            child: const _CornerScanningBrackets(),
-                          ),
-
-                          // Subtle Vertical Scan Guide Line (calm agricultural line, not neon)
-                          AnimatedBuilder(
-                            animation: _scanLineAnimation,
-                            builder: (context, child) {
-                              return Positioned(
-                                top: 40 + (_scanLineAnimation.value * 230),
-                                left: 35,
-                                right: 35,
-                                child: Container(
-                                  height: 2,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withAlpha(180),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.white.withAlpha(120),
-                                        blurRadius: 6,
-                                      ),
+                              // Multi-stop vignette scrim: preserves leaf clarity while elevating HUD & text readability
+                              Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      Colors.black.withAlpha(150),
+                                      Colors.black.withAlpha(45),
+                                      Colors.black.withAlpha(190),
                                     ],
+                                    stops: const [0.0, 0.45, 1.0],
                                   ),
                                 ),
-                              );
-                            },
-                          ),
-
-                          // Instruction: "Place a clear cotton leaf inside the frame"
-                          Positioned(
-                            bottom: 24,
-                            left: 20,
-                            right: 20,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withAlpha(160),
-                                borderRadius: BorderRadius.circular(20),
                               ),
-                              child: const Text(
-                                'Place a clear cotton leaf\ninside the frame',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.35,
+
+                              // Flash overlay on capture
+                              if (_isFlashing)
+                                Container(
+                                  color: Colors.white.withAlpha(220),
+                                ),
+
+                              // Top HUD Camera Status Chip
+                              Positioned(
+                                top: 12,
+                                left: 0,
+                                right: 0,
+                                child: Center(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withAlpha(150),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.white.withAlpha(35)),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          width: 7,
+                                          height: 7,
+                                          decoration: const BoxDecoration(
+                                            color: AppColors.primary,
+                                            shape: BoxShape.circle,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        const Text(
+                                          'ACTIVE VIEWFINDER',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                            letterSpacing: 0.8,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
+
+                              // Pulsing White Corner Scanning Brackets (positioned within frame bounds)
+                              AnimatedBuilder(
+                                animation: _bracketOpacityAnimation,
+                                builder: (context, child) {
+                                  return Opacity(
+                                    opacity: _bracketOpacityAnimation.value,
+                                    child: child,
+                                  );
+                                },
+                                child: const _CornerScanningBrackets(
+                                  topOffset: frameTop,
+                                  bottomOffset: frameBottom,
+                                  horizontalOffset: frameHorizontal,
+                                ),
+                              ),
+
+                              // Subtle Vertical Scan Guide Line (calm agricultural laser, confined inside frame)
+                              AnimatedBuilder(
+                                animation: _scanLineAnimation,
+                                builder: (context, child) {
+                                  return Positioned(
+                                    top: frameTop + 4 + (_scanLineAnimation.value * scanSweepDistance),
+                                    left: frameHorizontal + 10,
+                                    right: frameHorizontal + 10,
+                                    child: Container(
+                                      height: 2,
+                                      decoration: BoxDecoration(
+                                        color: AppColors.primaryLight.withAlpha(220),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: AppColors.primary.withAlpha(140),
+                                            blurRadius: 6,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+
+                              // Instruction: "Place a clear cotton leaf inside the frame" (positioned cleanly at bottom)
+                              Positioned(
+                                bottom: 12,
+                                left: 24,
+                                right: 24,
+                                child: Center(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withAlpha(185),
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(color: Colors.white.withAlpha(35)),
+                                    ),
+                                    child: const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.center_focus_strong_rounded,
+                                          color: AppColors.primaryLight,
+                                          size: 15,
+                                        ),
+                                        SizedBox(width: 8),
+                                        Flexible(
+                                          child: Text(
+                                            'Place a clear cotton leaf inside the frame',
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                              letterSpacing: 0.2,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                    ),
+                        ),
+                      );
+                    },
                   ),
+
                   // Administrator Paused Banner
                   ListenableBuilder(
                     listenable: widget.connectionController,
                     builder: (context, _) {
                       if (!widget.connectionController.health.isStopped) return const SizedBox.shrink();
                       return Container(
-                        margin: const EdgeInsets.only(bottom: 16),
+                        margin: const EdgeInsets.only(top: 14),
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         decoration: BoxDecoration(
                           color: AppColors.warningLight,
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
+                          border: Border.all(color: AppColors.warning.withAlpha(80)),
                         ),
                         child: Row(
                           children: [
@@ -406,6 +503,8 @@ class _ScanScreenState extends State<ScanScreen>
                     },
                   ),
 
+                  const SizedBox(height: 18),
+
                   // Bottom Capture Buttons: Photo & Gallery
                   ListenableBuilder(
                     listenable: widget.connectionController,
@@ -425,7 +524,7 @@ class _ScanScreenState extends State<ScanScreen>
                                   : () => _captureWithFlash(ImageSource.camera),
                             ),
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: 14),
                           Expanded(
                             child: CustomButton(
                               text: 'Gallery',
@@ -443,7 +542,7 @@ class _ScanScreenState extends State<ScanScreen>
                       );
                     },
                   ),
-                  const SizedBox(height: 26),
+                  const SizedBox(height: 28),
 
                   // Quick Field Test Samples Section
                   Row(
@@ -559,7 +658,15 @@ class _ScanScreenState extends State<ScanScreen>
 }
 
 class _CornerScanningBrackets extends StatelessWidget {
-  const _CornerScanningBrackets();
+  final double topOffset;
+  final double bottomOffset;
+  final double horizontalOffset;
+
+  const _CornerScanningBrackets({
+    this.topOffset = 22,
+    this.bottomOffset = 60,
+    this.horizontalOffset = 22,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -571,8 +678,8 @@ class _CornerScanningBrackets extends StatelessWidget {
       children: [
         // Top-Left
         Positioned(
-          top: 24,
-          left: 24,
+          top: topOffset,
+          left: horizontalOffset,
           child: SizedBox(
             width: length,
             height: length,
@@ -584,8 +691,8 @@ class _CornerScanningBrackets extends StatelessWidget {
         ),
         // Top-Right
         Positioned(
-          top: 24,
-          right: 24,
+          top: topOffset,
+          right: horizontalOffset,
           child: SizedBox(
             width: length,
             height: length,
@@ -597,8 +704,8 @@ class _CornerScanningBrackets extends StatelessWidget {
         ),
         // Bottom-Left
         Positioned(
-          bottom: 24,
-          left: 24,
+          bottom: bottomOffset,
+          left: horizontalOffset,
           child: SizedBox(
             width: length,
             height: length,
@@ -610,8 +717,8 @@ class _CornerScanningBrackets extends StatelessWidget {
         ),
         // Bottom-Right
         Positioned(
-          bottom: 24,
-          right: 24,
+          bottom: bottomOffset,
+          right: horizontalOffset,
           child: SizedBox(
             width: length,
             height: length,

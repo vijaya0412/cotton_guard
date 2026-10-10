@@ -17,6 +17,9 @@ import 'package:cottonguard/data/indian_locations.dart';
 import 'package:cottonguard/services/indian_time_service.dart';
 import 'package:cottonguard/screens/main_navigation_shell.dart';
 import 'package:cottonguard/screens/disease_library/disease_library_screen.dart';
+import 'package:cottonguard/screens/scan/scan_screen.dart';
+import 'package:cottonguard/controllers/connection_controller.dart';
+import 'package:cottonguard/services/api_service.dart';
 import 'package:flutter/services.dart';
 import 'package:cottonguard/services/google_auth_service.dart';
 import 'package:cottonguard/main.dart';
@@ -183,12 +186,24 @@ void main() {
 
       // Cloud domain without scheme defaults to HTTPS
       expect(
+        ApiConstants.normalizeBaseUrl('cotton-guard.onrender.com'),
+        'https://cotton-guard.onrender.com/api/v1',
+      );
+      expect(
         ApiConstants.normalizeBaseUrl('cotton-guard.hf.space'),
         'https://cotton-guard.hf.space/api/v1',
       );
       expect(
         ApiConstants.normalizeBaseUrl('api.cottonguard.org/api'),
         'https://api.cottonguard.org/api/v1',
+      );
+      expect(
+        ApiConstants.normalizeBaseUrl(''),
+        'https://cotton-guard.onrender.com/api/v1',
+      );
+      expect(
+        ApiConstants.defaultCloudUrl,
+        'https://cotton-guard.onrender.com/api/v1',
       );
 
       // Explicit HTTPS preserved
@@ -496,6 +511,39 @@ void main() {
       expect(exc.statusCode, 10);
       expect(exc.isConfigurationError, isTrue);
       expect(exc.toString(), 'Configuration error');
+    });
+
+    testWidgets('ScanScreen renders camera viewfinder, instruction overlay, and action buttons without overflow', (WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final storage = StorageService(prefs);
+      final api = ApiService(storage);
+      final connection = ConnectionController(api, storage);
+      final history = HistoryController(storage);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ScanScreen(
+            storageService: storage,
+            connectionController: connection,
+            historyController: history,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Viewfinder elements
+      expect(find.text('ACTIVE VIEWFINDER'), findsOneWidget);
+      expect(find.text('Place a clear cotton leaf inside the frame'), findsOneWidget);
+
+      // Buttons completely present below preview
+      expect(find.text('Take Photo'), findsOneWidget);
+      expect(find.text('Gallery'), findsOneWidget);
+
+      // Sample cards
+      expect(find.text('Verified Field Samples'), findsOneWidget);
+
+      connection.dispose();
     });
   });
 }

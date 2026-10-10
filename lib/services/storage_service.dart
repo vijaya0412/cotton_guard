@@ -1,6 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants/api_constants.dart';
 import '../models/scan_record.dart';
@@ -32,13 +30,10 @@ class StorageService {
       return ApiConstants.normalizeBaseUrl(saved);
     }
 
-    // Default dynamically based on platform:
-    // Android Emulator -> 10.0.2.2:8000/api/v1
-    // Otherwise -> 127.0.0.1:8000/api/v1
-    if (!kIsWeb && Platform.isAndroid) {
-      return ApiConstants.defaultEmulatorUrl;
-    }
-    return ApiConstants.defaultLocalhostUrl;
+    // Default to the configured production cloud URL (https://cotton-guard.onrender.com/api/v1)
+    // so physical mobile devices and release builds connect directly out of the box.
+    // Local development is preserved via --dart-define=API_BASE_URL=... or the in-app Server Connection settings.
+    return ApiConstants.configuredBaseUrl;
   }
 
   Future<void> setServerUrl(String url) async {
