@@ -1,0 +1,113 @@
+# ==============================================================================
+# Cotton Guard - Comprehensive Git Exclusion Rules
+# ==============================================================================
+
+# 1. Secrets, Environment Files & Private Credentials
+.env
+.env.*
+*.env
+*.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
+
+
+# 2. Python Virtual Environments, Caches & Bytecode
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+.pytest_cache/
+.coverage
+htmlcov/
+*.coverage.*
+
+# 3. SQLite Databases, Locks & Backups (Preserves User Data & Session Privacy)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backend/advisory.db
+/data/
+/backups/
+cottonguard_data/
+cottonguard_backups/
+
+# 4. Raw Training Datasets, Intermediate Tensors & Training Checkpoints (~3 GB)
+/dataset/
+/scratch/
+ml/models/*.pt
+*.h5
+*.keras
+*.weights.h5
+*.pt
+*.pth
+*.ckpt
+
+# Explicitly KEEP the authoritative production ONNX model for cloud deployment
+!ml/models/cotton_guard_model.onnx
+
+# 5. Android Signing Keys, Keystores, Configs & Build Outputs
+*.jks
+*.keystore
+key.properties
+local.properties
+/android/.gradle/
+/android/app/build/
+/android/build/
+.gradle/
+build/
+*.apk
+*.aab
+/android/app/debug/
+/android/app/profile/
+/android/app/release/
+
+# 6. Flutter / Dart Caches & Generated Outputs
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/coverage/
+app.*.symbols
+app.*.map.json
+.widget_preview/
+
+# 7. IDE, Editor & Operating System Metadata
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+*.class
+*.log
+*.swp
+.atom/
+.build/
+.buildlog/
+.history/
+.svn/
+.swiftpm/
+migrate_working_dir/

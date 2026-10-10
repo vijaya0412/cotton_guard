@@ -1,0 +1,48 @@
+services:
+  cottonguard-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cottonguard-backend
+    restart: unless-stopped
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - SQLITE_DB_PATH=/var/data/advisory.db
+      - ONNX_MODEL_PATH=/app/ml/models/cotton_guard_model.onnx
+      - COTTON_GUARD_SECRET_KEY=${COTTON_GUARD_SECRET_KEY:-cotton-guard-prod-key-2026-auth-security-master}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-647603326934-slkp7nf3ftducsfjq1dscvs06kj0q4im.apps.googleusercontent.com}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@cottonguard.org}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
+    volumes:
+      - cottonguard_data:/var/data
+      - cottonguard_backups:/var/backups
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: cottonguard-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - cottonguard-backend
+
+volumes:
+  cottonguard_data:
+  cottonguard_backups:
+  caddy_data:
+  caddy_config:
