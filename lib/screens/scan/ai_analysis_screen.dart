@@ -15,17 +15,31 @@ import 'diagnosis_result_screen.dart';
 class AiAnalysisScreen extends StatefulWidget {
   final File? imageFile;
   final String? assetPath;
+
+  /// Optional in-memory image payload. When provided it takes precedence over
+  /// [imageFile]/[assetPath] and is used for deterministic capture sources
+  /// (e.g. tests or future in-memory camera APIs).
+  final List<int>? imageBytes;
+  final String? imageFileName;
+
   final StorageService storageService;
   final ConnectionController connectionController;
   final HistoryController historyController;
+
+  /// Optional injected API client. Defaults to a real [ApiService] in production
+  /// and allows tests to supply deterministic responses without network access.
+  final ApiService? apiService;
 
   const AiAnalysisScreen({
     super.key,
     this.imageFile,
     this.assetPath,
+    this.imageBytes,
+    this.imageFileName,
     required this.storageService,
     required this.connectionController,
     required this.historyController,
+    this.apiService,
   });
 
   @override
@@ -55,7 +69,7 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
   @override
   void initState() {
     super.initState();
-    _apiService = ApiService(widget.storageService);
+    _apiService = widget.apiService ?? ApiService(widget.storageService);
 
     // Single calm animation for smooth 60fps rendering without raster shadow repaint
     _ringController = AnimationController(
@@ -89,7 +103,10 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
       // Read image bytes
       List<int> bytes;
       String fileName;
-      if (widget.imageFile != null) {
+      if (widget.imageBytes != null) {
+        bytes = widget.imageBytes!;
+        fileName = widget.imageFileName ?? 'capture.jpg';
+      } else if (widget.imageFile != null) {
         bytes = await widget.imageFile!.readAsBytes();
         fileName = widget.imageFile!.path.split(Platform.pathSeparator).last;
       } else {
@@ -115,18 +132,31 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
       final PredictionResult result = await predictionFuture;
       if (!mounted || _isCancelled) return;
 
+      // Safety guard: a non-successful response must never be rendered as a
+      // disease diagnosis nor persisted to scan history. Surface it through the
+      // same rejection UI used for NON_COTTON / POOR_QUALITY.
+      if (!result.success) {
+        throw ValidationException(
+          'The diagnosis could not be confirmed for this image. '
+          'Please retake a clear, well-lit photo of a single cotton leaf.',
+          code: 'UNCERTAIN',
+        );
+      }
+
       // Final stage: advisory finalization
       setState(() => _currentStageIndex = 3);
 
       // Save to local scan history asynchronously
       final scanRecord = ScanRecord.fromPrediction(
         id: 'scan_${DateTime.now().millisecondsSinceEpoch}',
-        imagePath: widget.imageFile?.path ?? widget.assetPath!,
+        imagePath: widget.imageFile?.path ?? widget.assetPath ?? 'memory://capture',
         result: result,
       );
       await widget.historyController.addScan(scanRecord);
 
       if (!mounted || _isCancelled) return;
+
+      _ringController.stop();
 
       // Navigate smoothly to results screen
       Navigator.of(context).pushReplacement(
@@ -135,7 +165,7 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
           pageBuilder: (context, animation, secondaryAnimation) =>
               DiagnosisResultScreen(
             result: result,
-            imageSource: widget.imageFile ?? widget.assetPath!,
+            imageSource: widget.imageFile ?? widget.assetPath,
             storageService: widget.storageService,
             historyController: widget.historyController,
           ),
@@ -146,6 +176,7 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
       );
     } catch (err) {
       if (!mounted || _isCancelled) return;
+      _ringController.stop();
       setState(() {
         _isProcessing = false;
         _error = err;
@@ -156,7 +187,7 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final imageSource = widget.imageFile ?? widget.assetPath!;
+    final imageSource = widget.imageFile ?? widget.assetPath;
 
     return PopScope(
       canPop: !_isProcessing,
@@ -432,6 +463,14 @@ class _AiAnalysisScreenState extends State<AiAnalysisScreen>
           message: err.message,
           metrics: err.details,
           onTryAgain: () => Navigator.of(context).pop(),
+          onBackToHome: () =>
+              Navigator.of(context).popUntil((route) => route.isFirst),
+        );
+      } else if (err.code == 'UNCERTAIN') {
+        return ErrorStateView.uncertain(
+          message: err.message,
+          metrics: err.details,
+          onRetake: () => Navigator.of(context).pop(),
           onBackToHome: () =>
               Navigator.of(context).popUntil((route) => route.isFirst),
         );

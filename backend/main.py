@@ -346,6 +346,23 @@ async def predict_disease(file: UploadFile = File(...)):
 
     # Evaluate Stage 4 Prediction Uncertainty
     is_uncertain, uncertainty_reason = CottonDomainGate.evaluate_prediction_uncertainty(probabilities)
+    if is_uncertain:
+        # Reject uncertain predictions with the SAME structured 422 contract used by
+        # POOR_QUALITY / NON_COTTON, so a low-certainty image can never be surfaced as
+        # a disease diagnosis. No predicted class, treatment, or advisory is returned.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "UNCERTAIN",
+                "message": (
+                    f"Unable to confirm a reliable diagnosis. {uncertainty_reason} "
+                    "Please retake a clear, well-lit photo of a single cotton leaf and try again."
+                ),
+                "metrics": {
+                    "confidence": round(confidence, 4)
+                }
+            }
+        )
 
     # Stage 5: Class-Based Database Retrieval from SQLite
     db_record = get_advisory_for_class(predicted_class)
@@ -364,23 +381,11 @@ async def predict_disease(file: UploadFile = File(...)):
             "favorable_conditions": "Environmental stress"
         })
 
-    # Agronomic Safety Rule: If prediction is uncertain, do NOT prescribe specific chemical pesticides!
-    if is_uncertain:
-        treatment = [
-            f"Inconclusive visual diagnosis (confidence: {confidence*100:.1f}%). Do NOT apply chemical pesticides without physical leaf inspection.",
-            "Monitor crop carefully over the next 24-48 hours for symptom progression.",
-            "Consult your local Krishi Vigyan Kendra (KVK) or Agriculture Extension Officer with a physical leaf specimen."
-        ]
-        prevention = [
-            "Maintain general field sanitation and clean borders.",
-            "Deploy yellow sticky traps (15-20/acre) to monitor potential vector populations.",
-            "Avoid excessive nitrogen fertilization while leaf condition is ambiguous."
-        ]
-        summary = f"Unable to confidently identify this disease ({uncertainty_reason}). Please capture a clearer cotton leaf image or consult a local agricultural expert."
-    else:
-        treatment = metadata["treatment"]
-        prevention = metadata["prevention"]
-        summary = metadata["summary"]
+    # Uncertain predictions are rejected above, so this advisory only ever
+    # describes a confidently identified disease class.
+    treatment = metadata["treatment"]
+    prevention = metadata["prevention"]
+    summary = metadata["summary"]
 
     return {
         "success": True,

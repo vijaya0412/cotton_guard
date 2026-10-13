@@ -23,8 +23,19 @@ from fastapi.testclient import TestClient
 # Ensure backend can be imported
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from main import app, CANONICAL_CLASSES
+from ml.cotton_gate import CottonDomainGate
 
 client = TestClient(app)
+
+# Absolute path to a real, non-cotton leaf fixture. This fixture is intentionally
+# NOT fabricated: verifying that a genuine mango leaf is rejected requires an
+# authentic photograph, which is not present in the repository. Until a real
+# fixture is supplied, the mango regression test is skipped rather than asserting
+# that the current colour/texture heuristic can recognise plant species.
+MANGO_FIXTURE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "manual_tests", "mango_leaf.jpeg"
+)
 
 def test_health_endpoint():
     response = client.get("/api/v1/health")
@@ -187,6 +198,69 @@ def test_predict_non_cotton_synthetic_image():
     assert response.status_code == 422
     detail = response.json()["detail"]
     assert detail["code"] == "NON_COTTON"
+
+@pytest.mark.skipif(
+    not os.path.exists(MANGO_FIXTURE_PATH),
+    reason=(
+        "No authentic non-cotton leaf fixture available at manual_tests/mango_leaf.jpeg. "
+        "A real mango/tomato/chilli photograph is required to verify species rejection; "
+        "the current colour/texture gate is NOT a species recogniser and must not be "
+        "asserted to reject mango leaves."
+    ),
+)
+def test_predict_mango_leaf_rejected_as_non_cotton():
+    # Regression: a real non-cotton leaf must be rejected (non-disease) once a
+    # dedicated cotton-vs-non-cotton suitability classifier is in place.
+    with open(MANGO_FIXTURE_PATH, "rb") as f:
+        file_bytes = f.read()
+
+    response = client.post(
+        "/api/v1/predict",
+        files={"file": ("mango_leaf.jpeg", file_bytes, "image/jpeg")}
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] in ("NON_COTTON", "UNCERTAIN")
+
+
+def test_predict_uncertain_prediction_rejected(monkeypatch):
+    # An uncertain model output must return a structured 422 rejection and must
+    # never carry a disease prediction, treatment, or advisory payload.
+    sample_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "assets", "diseases", "bacterial_blight", "bacterial_blight_1.jpg"
+    )
+    assert os.path.exists(sample_path)
+
+    def _force_uncertain(cls, probabilities):
+        return True, "Ambiguous symptoms: top candidates are too close."
+
+    monkeypatch.setattr(
+        CottonDomainGate,
+        "evaluate_prediction_uncertainty",
+        classmethod(_force_uncertain),
+    )
+
+    with open(sample_path, "rb") as f:
+        file_bytes = f.read()
+
+    response = client.post(
+        "/api/v1/predict",
+        files={"file": ("bacterial_blight_1.jpg", file_bytes, "image/jpeg")}
+    )
+    assert response.status_code == 422
+    payload = response.json()
+
+    detail = payload["detail"]
+    assert detail["code"] == "UNCERTAIN"
+    assert "confidence" in detail["metrics"]
+
+    # Rejection must never leak a diagnosis.
+    assert "predicted_class" not in payload
+    assert "treatment" not in payload
+    assert "advisory" not in payload
+    assert "is_healthy" not in payload
+    assert "success" not in payload or payload.get("success") is None
 
 def test_root_endpoints():
     res_root = client.get("/")

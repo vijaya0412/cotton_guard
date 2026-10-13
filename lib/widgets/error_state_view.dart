@@ -62,6 +62,24 @@ class ErrorStateView extends StatelessWidget {
     );
   }
 
+  factory ErrorStateView.uncertain({
+    required String message,
+    required VoidCallback onRetake,
+    VoidCallback? onBackToHome,
+    Map<String, dynamic>? metrics,
+  }) {
+    return ErrorStateView(
+      type: ErrorType.lowConfidence,
+      title: 'Diagnosis Unclear',
+      message: message,
+      primaryButtonText: 'Retake Photo',
+      onPrimaryPressed: onRetake,
+      secondaryButtonText: onBackToHome != null ? 'Back to Home' : null,
+      onSecondaryPressed: onBackToHome,
+      metrics: metrics,
+    );
+  }
+
   factory ErrorStateView.serverOffline({
     required String message,
     required VoidCallback onConfigureServer,
