@@ -199,25 +199,34 @@ def test_predict_non_cotton_synthetic_image():
     detail = response.json()["detail"]
     assert detail["code"] == "NON_COTTON"
 
-@pytest.mark.skipif(
-    not os.path.exists(MANGO_FIXTURE_PATH),
-    reason=(
-        "No authentic non-cotton leaf fixture available at manual_tests/mango_leaf.jpeg. "
-        "A real mango/tomato/chilli photograph is required to verify species rejection; "
-        "the current colour/texture gate is NOT a species recogniser and must not be "
-        "asserted to reject mango leaves."
-    ),
+@pytest.mark.parametrize(
+    "filename,fixture_path",
+    [
+        (
+            "mango_leaf.jpeg",
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "manual_tests", "non_cotton", "mango_leaf.jpeg"
+            ),
+        ),
+        (
+            "potato_leaf.jpg",
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "manual_tests", "non_cotton", "potato_leaf.jpg"
+            ),
+        ),
+    ],
 )
-def test_predict_mango_leaf_rejected_as_non_cotton():
-    # Regression: a real non-cotton leaf must be rejected (non-disease) once a
-    # dedicated cotton-vs-non-cotton suitability classifier is in place.
-    with open(MANGO_FIXTURE_PATH, "rb") as f:
+def test_predict_non_cotton_leaf_rejected(filename, fixture_path):
+    with open(fixture_path, "rb") as f:
         file_bytes = f.read()
 
     response = client.post(
         "/api/v1/predict",
-        files={"file": ("mango_leaf.jpeg", file_bytes, "image/jpeg")}
+        files={"file": (filename, file_bytes, "image/jpeg")}
     )
+
     assert response.status_code == 422
     detail = response.json()["detail"]
     assert detail["code"] in ("NON_COTTON", "UNCERTAIN")
