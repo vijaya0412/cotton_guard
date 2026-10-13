@@ -31,7 +31,7 @@ class CottonDomainGate:
     MIN_TEXTURE_ENERGY = 10.0 # Rejects flat artificial uniform color surfaces
 
     # Stage 4 Uncertainty Thresholds
-    LOW_CONFIDENCE_THRESHOLD = 0.55  # Below this, flag as low confidence
+    LOW_CONFIDENCE_THRESHOLD = 0.70  # Below this, flag as low confidence
     UNCERTAINTY_MARGIN = 0.12        # Top-1 vs Top-2 probability margin
 
     @classmethod
