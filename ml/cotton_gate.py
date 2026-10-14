@@ -11,6 +11,7 @@ from typing import Dict, Any, Tuple, Optional
 from PIL import Image
 import numpy as np
 import cv2
+from ml.cotton_domain_classifier import classify_cotton
 
 class CottonDomainGate:
     """Multi-stage validation and domain gating engine for Cotton Guard."""
@@ -206,11 +207,30 @@ class CottonDomainGate:
                 }
             }
 
+        # A dedicated binary classifier is the only stage intended to distinguish
+        # cotton from other real plant species. The seven-class disease model stays
+        # unchanged. Until its artifact is trained/installed, retain legacy behavior.
+        is_cotton, domain_message = classify_cotton(rgb_image)
+        if not is_cotton:
+            return {
+                "quality_passed": True,
+                "is_cotton_leaf": False,
+                "status": "NON_COTTON",
+                "message": domain_message,
+                "metrics": {
+                    "width": w,
+                    "height": h,
+                    "brightness": round(mean_brightness, 2),
+                    "blur_score": round(blur_score, 2),
+                    "foliage_ratio": round(foliage_ratio, 4)
+                }
+            }
+
         return {
             "quality_passed": True,
             "is_cotton_leaf": True,
             "status": "VALID",
-            "message": "Image quality and cotton leaf botanical verification passed.",
+            "message": domain_message if "classifier passed" in domain_message else "Image quality and cotton leaf botanical checks passed.",
             "metrics": {
                 "width": w,
                 "height": h,
